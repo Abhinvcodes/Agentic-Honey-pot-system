@@ -25,7 +25,7 @@ This project implements an **Agentic Honey-Pot** system that:
 ```bash
 python -m venv venv
 source venv/bin/activate
-pip install fastapi uvicorn groq python-dotenv requests
+pip install fastapi uvicorn groq python-dotenv requests jq
 ```
 ## .env
 GROQ_API_KEY=YOUR_GROQ_KEY
