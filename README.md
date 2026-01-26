@@ -28,9 +28,11 @@ source venv/bin/activate
 pip install fastapi uvicorn groq python-dotenv requests jq
 ```
 ## .env
+```
 GROQ_API_KEY=YOUR_GROQ_KEY
 API_SECRET_KEY=test-key-12345
 GUVI_CALLBACK_ENDPOINT=https://hackathon.guvi.in/api/updateHoneyPotFinalResult
+```
 
 ## Run server
 ```bash
