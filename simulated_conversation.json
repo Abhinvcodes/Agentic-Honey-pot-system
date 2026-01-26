@@ -1,0 +1,133 @@
+[
+    {
+        "step": 1,
+        "request": {
+            "sessionId": "session-sim-001",
+            "message": {
+                "sender": "scammer",
+                "text": "Your bank account will be blocked today. Verify immediately.",
+                "timestamp": "2026-01-26T16:30:00Z"
+            },
+            "conversationHistory": [],
+            "metadata": {
+                "channel": "SMS",
+                "language": "English",
+                "locale": "IN"
+            }
+        }
+    },
+    {
+        "step": 2,
+        "request": {
+            "sessionId": "session-sim-001",
+            "message": {
+                "sender": "scammer",
+                "text": "Share your UPI ID to avoid account suspension.",
+                "timestamp": "2026-01-26T16:31:00Z"
+            },
+            "conversationHistory": [
+                {
+                    "sender": "scammer",
+                    "text": "Your bank account will be blocked today. Verify immediately.",
+                    "timestamp": "2026-01-26T16:30:00Z"
+                },
+                {
+                    "sender": "user",
+                    "text": "Which bank account are you talking about? How do I verify?",
+                    "timestamp": "2026-01-26T16:30:15Z"
+                }
+            ],
+            "metadata": {
+                "channel": "SMS",
+                "language": "English",
+                "locale": "IN"
+            }
+        }
+    },
+    {
+        "step": 3,
+        "request": {
+            "sessionId": "session-sim-001",
+            "message": {
+                "sender": "scammer",
+                "text": "Go to https://secure-kyc-update.example/ and enter your card number. If not done in 10 mins, account blocked.",
+                "timestamp": "2026-01-26T16:32:00Z"
+            },
+            "conversationHistory": [
+                {
+                    "sender": "scammer",
+                    "text": "Your bank account will be blocked today. Verify immediately.",
+                    "timestamp": "2026-01-26T16:30:00Z"
+                },
+                {
+                    "sender": "user",
+                    "text": "Which bank account are you talking about? How do I verify?",
+                    "timestamp": "2026-01-26T16:30:15Z"
+                },
+                {
+                    "sender": "scammer",
+                    "text": "Share your UPI ID to avoid account suspension.",
+                    "timestamp": "2026-01-26T16:31:00Z"
+                },
+                {
+                    "sender": "user",
+                    "text": "I don't understand—why do you need my UPI ID? Which bank is this?",
+                    "timestamp": "2026-01-26T16:31:20Z"
+                }
+            ],
+            "metadata": {
+                "channel": "SMS",
+                "language": "English",
+                "locale": "IN"
+            }
+        }
+    },
+    {
+        "step": 4,
+        "request": {
+            "sessionId": "session-sim-001",
+            "message": {
+                "sender": "scammer",
+                "text": "Call our support now on +91 98765 43210 and complete verification. Send UPI: scammer.support@upi",
+                "timestamp": "2026-01-26T16:33:00Z"
+            },
+            "conversationHistory": [
+                {
+                    "sender": "scammer",
+                    "text": "Your bank account will be blocked today. Verify immediately.",
+                    "timestamp": "2026-01-26T16:30:00Z"
+                },
+                {
+                    "sender": "user",
+                    "text": "Which bank account are you talking about? How do I verify?",
+                    "timestamp": "2026-01-26T16:30:15Z"
+                },
+                {
+                    "sender": "scammer",
+                    "text": "Share your UPI ID to avoid account suspension.",
+                    "timestamp": "2026-01-26T16:31:00Z"
+                },
+                {
+                    "sender": "user",
+                    "text": "I don't understand—why do you need my UPI ID? Which bank is this?",
+                    "timestamp": "2026-01-26T16:31:20Z"
+                },
+                {
+                    "sender": "scammer",
+                    "text": "Go to https://secure-kyc-update.example/ and enter your card number. If not done in 10 mins, account blocked.",
+                    "timestamp": "2026-01-26T16:32:00Z"
+                },
+                {
+                    "sender": "user",
+                    "text": "Is this an official bank site? What’s the reference number?",
+                    "timestamp": "2026-01-26T16:32:25Z"
+                }
+            ],
+            "metadata": {
+                "channel": "SMS",
+                "language": "English",
+                "locale": "IN"
+            }
+        }
+    }
+]

@@ -1,0 +1,8 @@
+for i in 0 1 2 3; do
+  echo "STEP $((i+1))"
+  jq -c ".[$i].request" simulated_conversation.json | \
+    curl -s -X POST http://localhost:8000/api/honeypot \
+      -H "Content-Type: application/json" \
+      -H "x-api-key: test-key-12345" \
+      --data-binary @- | jq .
+done

@@ -1,0 +1,14 @@
+curl -X POST http: //localhost:8000/api/honeypot   -H "Content-Type: application/json"   -H "x-api-key: test-key-12345"   -d '{
+"sessionId": "session-123",
+"message": {
+    "sender": "scammer",
+    "text": "Your bank account will be blocked today. Verify immediately.",
+    "timestamp": "2026-01-26T12:50:00Z"
+},
+"conversationHistory": [],
+"metadata": {
+    "channel": "SMS",
+    "language": "English",
+    "locale": "IN"
+}
+}' | jq
