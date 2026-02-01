@@ -25,7 +25,7 @@ load_dotenv()
 
 app = FastAPI()
 
-API_SECRET_KEY = os.getenv("API_SECRET_KEY", "test-key-12345")
+API_SECRET_KEY = os.getenv("API_SECRET_KEY")
 
 # In-memory session store (replace with Redis for production)
 sessions = {}
