@@ -1,3 +1,13 @@
+# =============================================================================
+# IMPORTS
+# =============================================================================
+import os
+import json
+from datetime import datetime
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse
 from groq import (
     Groq,
     BadRequestError,
@@ -5,16 +15,68 @@ from groq import (
     APIConnectionError,
     AuthenticationError,
 )
-from models import IncomingRequest
-from dotenv import load_dotenv
-import os
-from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
-import json
 
+from models import IncomingRequest
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
 load_dotenv()
 
+app = FastAPI()
 
+API_SECRET_KEY = os.getenv("API_SECRET_KEY", "test-key-12345")
+
+# In-memory session store (replace with Redis for production)
+sessions = {}
+
+
+# =============================================================================
+# AUTHENTICATION
+# =============================================================================
+def validate_api_key(x_api_key: str = Header(None)):
+    if x_api_key != API_SECRET_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+# =============================================================================
+# SESSION MANAGEMENT
+# =============================================================================
+def get_or_create_session(session_id: str):
+    if session_id not in sessions:
+        sessions[session_id] = {
+            "created_at": datetime.now(),
+            "conversation": [],
+            "extracted_intel": {
+                "bankAccounts": [],
+                "upiIds": [],
+                "phishingLinks": [],
+                "phoneNumbers": [],
+                "suspiciousKeywords": [],
+            },
+            "scam_detected": False,
+            "agent_notes": "",
+        }
+    return sessions[session_id]
+
+
+def should_trigger_callback(session: dict) -> bool:
+    """
+    Decide if engagement is "complete" and we should send final callback.
+    Criteria: scam detected + we have intel + 5+ messages exchanged.
+    """
+    if not session["scam_detected"]:
+        return False
+
+    total_msgs = len(session["conversation"])
+    has_intel = any(session["extracted_intel"].values())
+
+    return total_msgs >= 5 and has_intel
+
+
+# =============================================================================
+# AI FUNCTIONS
+# =============================================================================
 def detect_scam_intent(text: str) -> tuple[bool, str]:
     """
     Quick scam detection using Groq.
@@ -48,6 +110,68 @@ def detect_scam_intent(text: str) -> tuple[bool, str]:
     reason = result.replace("SCAM", "").replace("NOT_SCAM", "").strip()
 
     return is_scam, reason
+
+
+def extract_intelligence(scammer_text: str, existing_intel: dict) -> dict:
+    """
+    Use Groq to extract structured intelligence from scammer's messages.
+    """
+    client = Groq()
+
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract scam intelligence from the text.\n"
+                        "Return ONLY valid JSON.\n"
+                        "All keys must exist and each value must be an array of strings (use [] if none):\n"
+                        "bankAccounts, upiIds, phishingLinks, phoneNumbers, suspiciousKeywords.\n"
+                        "Do not include extra keys or any explanation."
+                    ),
+                },
+                {"role": "user", "content": scammer_text},
+            ],
+            temperature=0,
+            max_tokens=300,
+            response_format={"type": "json_object"},
+        )
+    except AuthenticationError as e:
+        raise HTTPException(status_code=401, detail=f"Groq auth error: {e}")
+    except BadRequestError as e:
+        raise HTTPException(status_code=400, detail=f"Groq bad request: {e}")
+    except RateLimitError as e:
+        raise HTTPException(status_code=429, detail=f"Groq rate limited: {e}")
+    except APIConnectionError as e:
+        raise HTTPException(status_code=503, detail=f"Groq connection error: {e}")
+
+    raw = response.choices[0].message.content or "{}"
+
+    # Parse JSON safely
+    try:
+        intel = json.loads(raw)
+    except json.JSONDecodeError:
+        return existing_intel
+
+    # Ensure keys exist
+    for k in [
+        "bankAccounts",
+        "upiIds",
+        "phishingLinks",
+        "phoneNumbers",
+        "suspiciousKeywords",
+    ]:
+        existing_intel.setdefault(k, [])
+        new_items = intel.get(k, []) or []
+        if not isinstance(new_items, list):
+            continue
+        for item in new_items:
+            if isinstance(item, str) and item and item not in existing_intel[k]:
+                existing_intel[k].append(item)
+
+    return existing_intel
 
 
 def agent_reply(
@@ -112,116 +236,39 @@ def agent_reply(
     return agent_text, intelligence
 
 
-def extract_intelligence(scammer_text: str, existing_intel: dict) -> dict:
+# =============================================================================
+# CALLBACK
+# =============================================================================
+def send_guvi_callback(session_id: str, session: dict):
     """
-    Use Groq to extract structured intelligence from scammer's messages.
+    Send final results to GUVI evaluation endpoint.
+    MANDATORY for scoring!
     """
-    client = Groq()
+    import requests
+
+    payload = {
+        "sessionId": session_id,
+        "scamDetected": session["scam_detected"],
+        "totalMessagesExchanged": len(session["conversation"]),
+        "extractedIntelligence": session["extracted_intel"],
+        "agentNotes": session["agent_notes"],
+    }
 
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Extract scam intelligence from the text.\n"
-                        "Return ONLY valid JSON.\n"
-                        "All keys must exist and each value must be an array of strings (use [] if none):\n"
-                        "bankAccounts, upiIds, phishingLinks, phoneNumbers, suspiciousKeywords.\n"
-                        "Do not include extra keys or any explanation."
-                    ),
-                },
-                {"role": "user", "content": scammer_text},
-            ],
-            temperature=0,
-            max_tokens=300,
-            response_format={"type": "json_object"},
+        response = requests.post(
+            os.getenv("GUVI_CALLBACK_ENDPOINT"), json=payload, timeout=5
         )
-    except AuthenticationError as e:
-        raise HTTPException(status_code=401, detail=f"Groq auth error: {e}")
-    except BadRequestError as e:
-        raise HTTPException(status_code=400, detail=f"Groq bad request: {e}")
-    except RateLimitError as e:
-        raise HTTPException(status_code=429, detail=f"Groq rate limited: {e}")
-    except APIConnectionError as e:
-        raise HTTPException(status_code=503, detail=f"Groq connection error: {e}")
-
-    raw = response.choices[0].message.content or "{}"
-
-    # Parse JSON safely
-    try:
-        intel = json.loads(raw)
-    except json.JSONDecodeError:
-        # Optional: uncomment next line temporarily for debugging
-        # print("RAW INTEL (non-JSON):", raw)
-        return existing_intel
-
-    # Ensure keys exist
-    for k in [
-        "bankAccounts",
-        "upiIds",
-        "phishingLinks",
-        "phoneNumbers",
-        "suspiciousKeywords",
-    ]:
-        existing_intel.setdefault(k, [])
-        new_items = intel.get(k, []) or []
-        if not isinstance(new_items, list):
-            continue
-        for item in new_items:
-            if isinstance(item, str) and item and item not in existing_intel[k]:
-                existing_intel[k].append(item)
-
-    return existing_intel
+        print(f"Callback sent: {response.status_code}")
+    except Exception as e:
+        print(f"Callback failed: {e}")
 
 
-from datetime import datetime, timedelta
-
-# In-memory session store (replace with Redis for production)
-sessions = {}
-
-
-def get_or_create_session(session_id: str):
-    if session_id not in sessions:
-        sessions[session_id] = {
-            "created_at": datetime.now(),
-            "conversation": [],
-            "extracted_intel": {
-                "bankAccounts": [],
-                "upiIds": [],
-                "phishingLinks": [],
-                "phoneNumbers": [],
-                "suspiciousKeywords": [],
-            },
-            "scam_detected": False,
-            "agent_notes": "",
-        }
-    return sessions[session_id]
-
-
-def should_trigger_callback(session: dict) -> bool:
-    """
-    Decide if engagement is "complete" and we should send final callback.
-    Criteria: scam detected + we have intel + 5+ messages exchanged.
-    """
-    if not session["scam_detected"]:
-        return False
-
-    total_msgs = len(session["conversation"])
-    has_intel = any(session["extracted_intel"].values())
-
-    return total_msgs >= 5 and has_intel
-
-
-app = FastAPI()
-
-API_SECRET_KEY = os.getenv("API_SECRET_KEY", "test-key-12345")
-
-
-def validate_api_key(x_api_key: str = Header(None)):
-    if x_api_key != API_SECRET_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+# =============================================================================
+# API ROUTES
+# =============================================================================
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
 
 
 @app.post("/api/honeypot")
@@ -239,7 +286,6 @@ async def honeypot_endpoint(
     - Return response
     - Trigger callback if engagement complete
     """
-
     # Validate API key
     validate_api_key(x_api_key)
 
@@ -305,7 +351,7 @@ async def honeypot_endpoint(
         },
         "extractedIntelligence": session["extracted_intel"],
         "agentNotes": session["agent_notes"],
-        "agentReply": agent_text,  # Send back the agent's response
+        "agentReply": agent_text,
     }
 
     # Check if we should trigger the mandatory callback
@@ -313,32 +359,3 @@ async def honeypot_endpoint(
         background_tasks.add_task(send_guvi_callback, request.sessionId, session)
 
     return JSONResponse(response)
-
-
-def send_guvi_callback(session_id: str, session: dict):
-    """
-    Send final results to GUVI evaluation endpoint.
-    MANDATORY for scoring!
-    """
-    import requests
-
-    payload = {
-        "sessionId": session_id,
-        "scamDetected": session["scam_detected"],
-        "totalMessagesExchanged": len(session["conversation"]),
-        "extractedIntelligence": session["extracted_intel"],
-        "agentNotes": session["agent_notes"],
-    }
-
-    try:
-        response = requests.post(
-            os.getenv("GUVI_CALLBACK_ENDPOINT"), json=payload, timeout=5
-        )
-        print(f"Callback sent: {response.status_code}")
-    except Exception as e:
-        print(f"Callback failed: {e}")
-
-
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
