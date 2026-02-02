@@ -3,6 +3,7 @@
 # =============================================================================
 import os
 import json
+import requests
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -26,6 +27,7 @@ load_dotenv()
 app = FastAPI()
 
 API_SECRET_KEY = os.getenv("API_SECRET_KEY")
+GUVI_CALLBACK_ENDPOINT = os.getenv("GUVI_CALLBACK_ENDPOINT")
 
 # In-memory session store (replace with Redis for production)
 sessions = {}
@@ -42,7 +44,7 @@ def validate_api_key(x_api_key: str = Header(None)):
 # =============================================================================
 # SESSION MANAGEMENT
 # =============================================================================
-def get_or_create_session(session_id: str):
+def get_or_create_session(session_id: str) -> dict:
     if session_id not in sessions:
         sessions[session_id] = {
             "created_at": datetime.now(),
@@ -56,6 +58,7 @@ def get_or_create_session(session_id: str):
             },
             "scam_detected": False,
             "agent_notes": "",
+            "callback_sent": False,
         }
     return sessions[session_id]
 
@@ -63,15 +66,24 @@ def get_or_create_session(session_id: str):
 def should_trigger_callback(session: dict) -> bool:
     """
     Decide if engagement is "complete" and we should send final callback.
-    Criteria: scam detected + we have intel + 5+ messages exchanged.
+    Criteria:
+    - Scam detected
+    - Has some intel OR 5+ messages exchanged
+    - Callback not already sent
     """
+    if session["callback_sent"]:
+        return False
+
     if not session["scam_detected"]:
         return False
 
     total_msgs = len(session["conversation"])
-    has_intel = any(session["extracted_intel"].values())
+    has_intel = any(
+        len(v) > 0 for v in session["extracted_intel"].values() if isinstance(v, list)
+    )
 
-    return total_msgs >= 5 and has_intel
+    # Trigger if we have intel and 5+ messages, OR 10+ messages regardless
+    return (total_msgs >= 5 and has_intel) or total_msgs >= 10
 
 
 # =============================================================================
@@ -107,26 +119,25 @@ def detect_scam_intent(text: str) -> tuple[bool, str]:
 
     result = response.choices[0].message.content.strip()
 
-    # Fix: Check for NOT_SCAM first (more specific match)
+    # Check for NOT_SCAM first (more specific match)
     if result.upper().startswith("NOT_SCAM") or "NOT_SCAM" in result.upper():
         is_scam = False
-        reason = result.replace("NOT_SCAM", "").strip(" :\n-")
+        reason = result.replace("NOT_SCAM", "").replace("not_scam", "").strip(" :\n-")
     elif result.upper().startswith("SCAM") or "SCAM" in result.upper():
         is_scam = True
-        reason = result.replace("SCAM", "").strip(" :\n-")
+        reason = result.replace("SCAM", "").replace("scam", "").strip(" :\n-")
     else:
-        # Default to not scam if unclear
         is_scam = False
         reason = result
 
-    return is_scam, reason
+    return is_scam, reason if reason else "Analysis complete"
 
 
 def extract_intelligence(scammer_text: str, existing_intel: dict) -> dict:
     """
     Use Groq to extract structured intelligence from scammer's messages.
     """
-    client = Groq()
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
     try:
         response = client.chat.completions.create(
@@ -148,24 +159,18 @@ def extract_intelligence(scammer_text: str, existing_intel: dict) -> dict:
             max_tokens=300,
             response_format={"type": "json_object"},
         )
-    except AuthenticationError as e:
-        raise HTTPException(status_code=401, detail=f"Groq auth error: {e}")
-    except BadRequestError as e:
-        raise HTTPException(status_code=400, detail=f"Groq bad request: {e}")
-    except RateLimitError as e:
-        raise HTTPException(status_code=429, detail=f"Groq rate limited: {e}")
-    except APIConnectionError as e:
-        raise HTTPException(status_code=503, detail=f"Groq connection error: {e}")
+    except (AuthenticationError, BadRequestError, RateLimitError, APIConnectionError):
+        # On error, return existing intel unchanged
+        return existing_intel
 
     raw = response.choices[0].message.content or "{}"
 
-    # Parse JSON safely
     try:
         intel = json.loads(raw)
     except json.JSONDecodeError:
         return existing_intel
 
-    # Ensure keys exist
+    # Merge new intel with existing
     for k in [
         "bankAccounts",
         "upiIds",
@@ -184,33 +189,29 @@ def extract_intelligence(scammer_text: str, existing_intel: dict) -> dict:
     return existing_intel
 
 
-def agent_reply(
-    latest_scammer_message: str, conversation_history: list[dict], extracted_intel: dict
-) -> tuple[str, dict]:
+def generate_agent_reply(
+    latest_scammer_message: str, conversation_history: list[dict]
+) -> str:
     """
     AI Agent responds like a confused/concerned victim.
-    Also extracts intelligence from the scammer's message.
-    Returns (agent_response_text, updated_extracted_intel)
+    Returns agent's reply text only.
     """
-    client = Groq()
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-    # Build conversation for Groq
     messages = [
         {
             "role": "system",
             "content": """You are a victim receiving a scam message. 
-            Your goal: respond naturally (confused, concerned) to keep the scammer talking.
-            NEVER reveal that you know it's a scam. Ask clarifying questions that make them reveal more details (bank, link, phone, UPI ID).
-            Keep replies short and human-like (1-3 sentences max).""",
+Your goal: respond naturally (confused, concerned) to keep the scammer talking.
+NEVER reveal that you know it's a scam. 
+Ask clarifying questions that make them reveal more details (bank, link, phone, UPI ID).
+Keep replies short and human-like (1-3 sentences max).""",
         }
     ]
 
-    ROLE_MAP = {
-        "scammer": "user",
-        "user": "assistant",
-    }
+    ROLE_MAP = {"scammer": "user", "user": "assistant"}
 
-    # Add prior history
+    # Add prior history (last 5 messages for context)
     for msg in conversation_history[-5:]:
         sender = msg.get("sender")
         text = msg.get("text")
@@ -221,7 +222,6 @@ def agent_reply(
     # Add latest scammer message
     messages.append({"role": "user", "content": latest_scammer_message})
 
-    # Get agent response
     try:
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -238,12 +238,7 @@ def agent_reply(
     except APIConnectionError as e:
         raise HTTPException(status_code=503, detail=f"Groq connection error: {e}")
 
-    agent_text = response.choices[0].message.content.strip()
-
-    # Extract intelligence from scammer's message using Groq
-    intelligence = extract_intelligence(latest_scammer_message, extracted_intel)
-
-    return agent_text, intelligence
+    return response.choices[0].message.content.strip()
 
 
 # =============================================================================
@@ -254,23 +249,33 @@ def send_guvi_callback(session_id: str, session: dict):
     Send final results to GUVI evaluation endpoint.
     MANDATORY for scoring!
     """
-    import requests
+    # Calculate engagement duration
+    engagement_seconds = int((datetime.now() - session["created_at"]).total_seconds())
 
     payload = {
         "sessionId": session_id,
+        "status": "success",
         "scamDetected": session["scam_detected"],
-        "totalMessagesExchanged": len(session["conversation"]),
+        "engagementMetrics": {
+            "engagementDurationSeconds": engagement_seconds,
+            "totalMessagesExchanged": len(session["conversation"]),
+        },
         "extractedIntelligence": session["extracted_intel"],
         "agentNotes": session["agent_notes"],
     }
 
     try:
         response = requests.post(
-            os.getenv("GUVI_CALLBACK_ENDPOINT"), json=payload, timeout=5
+            GUVI_CALLBACK_ENDPOINT,
+            json=payload,
+            timeout=10,
+            headers={"Content-Type": "application/json"},
         )
-        print(f"Callback sent: {response.status_code}")
+        print(f"✅ Callback sent for session {session_id}: {response.status_code}")
+        print(f"   Response: {response.text[:200]}")
+        session["callback_sent"] = True
     except Exception as e:
-        print(f"Callback failed: {e}")
+        print(f"❌ Callback failed for session {session_id}: {e}")
 
 
 # =============================================================================
@@ -289,12 +294,13 @@ async def honeypot_endpoint(
 ):
     """
     Main honeypot endpoint.
-    - Validate API key
-    - Detect scam intent
-    - If scam: activate agent
-    - Extract intelligence
-    - Return response
-    - Trigger callback if engagement complete
+
+    Flow:
+    1. Validate API key
+    2. Detect scam intent
+    3. If scam: generate agent reply, extract intel in background
+    4. Return ONLY {status, reply}
+    5. Send full report to GUVI callback when engagement complete
     """
     # Validate API key
     validate_api_key(x_api_key)
@@ -307,65 +313,46 @@ async def honeypot_endpoint(
         {
             "sender": "scammer",
             "text": request.message.text,
-            "timestamp": request.message.timestamp,
+            "timestamp": request.message.timestamp or datetime.now().isoformat() + "Z",
         }
     )
 
-    # Detect scam intent on first message
+    # Detect scam intent (on every message to catch evolving scams)
     if not session["scam_detected"]:
         is_scam, reason = detect_scam_intent(request.message.text)
         session["scam_detected"] = is_scam
         session["agent_notes"] = reason
 
-    # If not scam, return early
+    # If not scam, return simple response
     if not session["scam_detected"]:
         return JSONResponse(
-            {
-                "status": "success",
-                "scamDetected": False,
-                "engagementMetrics": {
-                    "engagementDurationSeconds": 0,
-                    "totalMessagesExchanged": len(session["conversation"]),
-                },
-                "extractedIntelligence": None,
-                "agentNotes": "No scam detected",
-            }
+            {"status": "success", "reply": "Hello! How can I help you today?"}
         )
 
-    # Scam detected → activate agent
-    agent_text, updated_intel = agent_reply(
-        request.message.text, session["conversation"], session["extracted_intel"]
+    # === SCAM DETECTED - Engage the scammer ===
+
+    # Extract intelligence from scammer's message (updates session in place)
+    session["extracted_intel"] = extract_intelligence(
+        request.message.text, session["extracted_intel"]
     )
 
-    session["extracted_intel"] = updated_intel
+    # Generate agent reply to keep scammer engaged
+    agent_reply_text = generate_agent_reply(
+        request.message.text, session["conversation"]
+    )
 
-    # Add agent reply to conversation
+    # Add agent reply to conversation history
     session["conversation"].append(
         {
             "sender": "user",
-            "text": agent_text,
+            "text": agent_reply_text,
             "timestamp": datetime.now().isoformat() + "Z",
         }
     )
 
-    # Calculate engagement duration
-    engagement_seconds = int((datetime.now() - session["created_at"]).total_seconds())
-
-    # Build response
-    response = {
-        "status": "success",
-        "reply": agent_text,  # ADD THIS - the AI's reply to the scammer
-        "scamDetected": True,
-        "engagementMetrics": {
-            "engagementDurationSeconds": engagement_seconds,
-            "totalMessagesExchanged": len(session["conversation"]),
-        },
-        "extractedIntelligence": session["extracted_intel"],
-        "agentNotes": session["agent_notes"],
-    }
-
-    # Check if we should trigger the mandatory callback
+    # Check if we should send the final callback to GUVI
     if should_trigger_callback(session):
         background_tasks.add_task(send_guvi_callback, request.sessionId, session)
 
-    return JSONResponse(response)
+    # Return ONLY the simple response format
+    return JSONResponse({"status": "success", "reply": agent_reply_text})
