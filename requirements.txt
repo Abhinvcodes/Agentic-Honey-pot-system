@@ -1,1 +1,5 @@
-fastapi uvicorn groq python-dotenv requests
+fastapi
+uvicorn
+groq
+python-dotenv
+requests
