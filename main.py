@@ -106,7 +106,7 @@ def detect_scam_intent(text: str) -> tuple[bool, str]:
         raise HTTPException(status_code=503, detail=f"Groq connection error: {e}")
 
     result = response.choices[0].message.content.strip()
-    
+
     # Fix: Check for NOT_SCAM first (more specific match)
     if result.upper().startswith("NOT_SCAM") or "NOT_SCAM" in result.upper():
         is_scam = False
@@ -354,6 +354,7 @@ async def honeypot_endpoint(
     # Build response
     response = {
         "status": "success",
+        "reply": agent_text,  # ADD THIS - the AI's reply to the scammer
         "scamDetected": True,
         "engagementMetrics": {
             "engagementDurationSeconds": engagement_seconds,

@@ -55,7 +55,8 @@ class EngagementMetrics(BaseModel):
 
 
 class APIResponse(BaseModel):
-    status: str  # "success" or "error"
+    status: str
+    reply: str  # ADD THIS - agent's reply message
     scamDetected: bool
     engagementMetrics: Optional[EngagementMetrics] = None
     extractedIntelligence: Optional[ExtractedIntelligence] = None
