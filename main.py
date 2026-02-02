@@ -106,8 +106,18 @@ def detect_scam_intent(text: str) -> tuple[bool, str]:
         raise HTTPException(status_code=503, detail=f"Groq connection error: {e}")
 
     result = response.choices[0].message.content.strip()
-    is_scam = "SCAM" in result.upper()
-    reason = result.replace("SCAM", "").replace("NOT_SCAM", "").strip()
+    
+    # Fix: Check for NOT_SCAM first (more specific match)
+    if result.upper().startswith("NOT_SCAM") or "NOT_SCAM" in result.upper():
+        is_scam = False
+        reason = result.replace("NOT_SCAM", "").strip(" :\n-")
+    elif result.upper().startswith("SCAM") or "SCAM" in result.upper():
+        is_scam = True
+        reason = result.replace("SCAM", "").strip(" :\n-")
+    else:
+        # Default to not scam if unclear
+        is_scam = False
+        reason = result
 
     return is_scam, reason
 
