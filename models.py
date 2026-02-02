@@ -1,18 +1,23 @@
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
 
 class Message(BaseModel):
-    sender: str  # "scammer" or "user"
+    sender: str
     text: str
-    timestamp: str
+    timestamp: Optional[str] = None
+
+
+class Metadata(BaseModel):
+    platform: Optional[str] = None
+    reportedCount: Optional[int] = None
 
 
 class IncomingRequest(BaseModel):
     sessionId: str
-    message: Message  # latest message
-    conversationHistory: Optional[List[Message]] = None
-    metadata: Optional[Dict] = None
+    message: Message
+    conversationHistory: Optional[List[Message]] = []
+    metadata: Optional[Metadata] = None
 
 
 class ExtractedIntelligence(BaseModel):

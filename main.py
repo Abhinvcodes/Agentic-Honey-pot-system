@@ -351,7 +351,6 @@ async def honeypot_endpoint(
         },
         "extractedIntelligence": session["extracted_intel"],
         "agentNotes": session["agent_notes"],
-        "agentReply": agent_text,
     }
 
     # Check if we should trigger the mandatory callback
