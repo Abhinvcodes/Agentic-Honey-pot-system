@@ -32,6 +32,37 @@ GUVI_CALLBACK_ENDPOINT = os.getenv("GUVI_CALLBACK_ENDPOINT")
 # In-memory session store (replace with Redis for production)
 sessions = {}
 
+# Debug storage for last request
+last_request_debug = {"body": None, "headers": None, "error": None}
+
+
+# Middleware to capture raw request for debugging
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import Request
+
+
+class DebugMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        global last_request_debug
+        if request.url.path == "/api/honeypot":
+            try:
+                body = await request.body()
+                last_request_debug = {
+                    "body": body.decode() if body else None,
+                    "headers": dict(request.headers),
+                    "error": None,
+                    "path": str(request.url.path),
+                    "method": request.method,
+                }
+            except Exception as e:
+                last_request_debug["error"] = str(e)
+
+        response = await call_next(request)
+        return response
+
+
+app.add_middleware(DebugMiddleware)
+
 
 # =============================================================================
 # AUTHENTICATION
@@ -284,6 +315,12 @@ def send_guvi_callback(session_id: str, session: dict):
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/api/debug/last-request")
+async def get_last_request():
+    """View the last request received - useful for debugging deployed API"""
+    return last_request_debug
 
 
 @app.post("/api/honeypot")
