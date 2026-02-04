@@ -34,6 +34,7 @@ sessions = {}
 
 # Debug storage for last request
 last_request_debug = {"body": None, "headers": None, "error": None}
+all_requests_log = []  # Store last 10 requests
 
 
 # Middleware to capture raw request for debugging
@@ -43,17 +44,24 @@ from fastapi import Request
 
 class DebugMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        global last_request_debug
-        if request.url.path == "/api/honeypot":
+        global last_request_debug, all_requests_log
+        
+        # Capture ALL POST requests for debugging
+        if request.method == "POST":
             try:
                 body = await request.body()
-                last_request_debug = {
+                debug_entry = {
                     "body": body.decode() if body else None,
                     "headers": dict(request.headers),
                     "error": None,
                     "path": str(request.url.path),
                     "method": request.method,
                 }
+                last_request_debug = debug_entry
+                # Keep last 10 requests
+                all_requests_log.append(debug_entry)
+                if len(all_requests_log) > 10:
+                    all_requests_log.pop(0)
             except Exception as e:
                 last_request_debug["error"] = str(e)
 
@@ -321,6 +329,12 @@ def health_check():
 async def get_last_request():
     """View the last request received - useful for debugging deployed API"""
     return last_request_debug
+
+
+@app.get("/api/debug/all-requests")
+async def get_all_requests():
+    """View all recent requests (last 10) - shows what paths are being hit"""
+    return {"count": len(all_requests_log), "requests": all_requests_log}
 
 
 @app.post("/api/honeypot")
